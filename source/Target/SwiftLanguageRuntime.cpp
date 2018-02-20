@@ -713,11 +713,6 @@ const std::string SwiftLanguageRuntime::GetCurrentMangledName(const char *mangle
 #endif
 }
 
-uint32_t SwiftLanguageRuntime::FindEquivalentNames(
-    ConstString type_name, std::vector<ConstString> &equivalents) {
-  return 0;
-}
-
 void SwiftLanguageRuntime::MethodName::Clear() {
   m_full.Clear();
   m_basename = llvm::StringRef();
@@ -1100,42 +1095,6 @@ llvm::StringRef SwiftLanguageRuntime::MethodName::GetBasename() {
   if (!m_parsed)
     Parse();
   return m_basename;
-}
-
-llvm::StringRef SwiftLanguageRuntime::MethodName::GetContext() {
-  if (!m_parsed)
-    Parse();
-  return m_context;
-}
-
-llvm::StringRef SwiftLanguageRuntime::MethodName::GetArguments() {
-  if (!m_parsed)
-    Parse();
-  return m_arguments;
-}
-
-llvm::StringRef SwiftLanguageRuntime::MethodName::GetQualifiers() {
-  if (!m_parsed)
-    Parse();
-  return m_qualifiers;
-}
-
-llvm::StringRef SwiftLanguageRuntime::MethodName::GetMetatypeReference() {
-  if (!m_parsed)
-    Parse();
-  return m_qualifiers;
-}
-
-llvm::StringRef SwiftLanguageRuntime::MethodName::GetTemplateArguments() {
-  if (!m_parsed)
-    Parse();
-  return m_template_args;
-}
-
-llvm::StringRef SwiftLanguageRuntime::MethodName::GetReturnType() {
-  if (!m_parsed)
-    Parse();
-  return m_return_type;
 }
 
 const CompilerType &SwiftLanguageRuntime::GetBoxMetadataType() {
@@ -2091,7 +2050,7 @@ bool SwiftLanguageRuntime::GetDynamicTypeAndAddress_Promise(
     lldb::addr_t val_ptr_addr = in_value.GetPointerValue();
     {
       auto swift_type = GetSwiftType(dyn_type);
-      if (swift_type->getAnyOptionalObjectType())
+      if (swift_type->getOptionalObjectType())
         val_ptr_addr = GetProcess()->ReadPointerFromMemory(val_ptr_addr, error);
     }
     address.SetLoadAddress(val_ptr_addr, &m_process->GetTarget());

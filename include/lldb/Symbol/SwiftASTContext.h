@@ -503,9 +503,6 @@ public:
   static bool GetProtocolTypeInfo(const CompilerType &type,
                                   ProtocolInfo &protocol_info);
 
-  static bool IsOptionalChain(CompilerType type, CompilerType &payload_type,
-                              uint32_t &depth);
-
   enum class TypeAllocationStrategy { eInline, ePointer, eDynamic, eUnknown };
 
   static TypeAllocationStrategy GetAllocationStrategy(const CompilerType &type);
@@ -747,9 +744,6 @@ public:
 
   bool IsReferenceType(void *type, CompilerType *pointee_type,
                        bool *is_rvalue) override;
-
-  static bool IsInoutType(const CompilerType &compiler_type,
-                          CompilerType *original_type);
 
   bool
   ShouldTreatScalarValueAsAddress(lldb::opaque_compiler_type_t type) override;

@@ -35,6 +35,7 @@
 #include "swift/Basic/Dwarf.h"
 #include "swift/Basic/LangOptions.h"
 #include "swift/Basic/Platform.h"
+#include "swift/Basic/PrimarySpecificPaths.h"
 #include "swift/Basic/SourceManager.h"
 #include "swift/ClangImporter/ClangImporter.h"
 #include "swift/ClangImporter/ClangImporterOptions.h"
@@ -478,7 +479,6 @@ CachedMemberInfo *SwiftASTContext::GetCachedMemberInfo(void *type) {
       break;
 
     case swift::TypeKind::Optional:
-    case swift::TypeKind::ImplicitlyUnwrappedOptional:
     case swift::TypeKind::NameAlias:
     case swift::TypeKind::Paren:
     case swift::TypeKind::Dictionary:
@@ -1002,16 +1002,6 @@ SwiftEnumDescriptor::CreateDescriptor(swift::ASTContext *ast,
   assert(swift_can_type.getPointer());
   SwiftASTContext *swift_ast_ctx = SwiftASTContext::GetSwiftASTContext(ast);
   assert(swift_ast_ctx);
-  if (enum_decl == ast->getImplicitlyUnwrappedOptionalDecl()) {
-    swift::EnumDecl *optional_decl = ast->getOptionalDecl();
-    swift::CanType bound_optional_can_type =
-        swift::BoundGenericType::get(
-            optional_decl,
-            swift::Type(),
-            swift::cast<swift::BoundGenericType>(swift_can_type)
-                ->getGenericArgs())->getCanonicalType();
-    return CreateDescriptor(ast, bound_optional_can_type, optional_decl);
-  }
   swift::irgen::IRGenModule &irgen_module = swift_ast_ctx->GetIRGenModule();
   const swift::irgen::EnumImplStrategy &enum_impl_strategy =
       swift::irgen::getEnumImplStrategy(irgen_module, swift_can_type);
@@ -3073,21 +3063,6 @@ swift::ASTContext *SwiftASTContext::GetASTContext() {
     }
 
     GetASTMap().Insert(m_ast_context_ap.get(), this);
-
-    // Store common useful manglings for quick lookup - this also ensures that
-    // types that didn't come out of the visitor (e.g. fallback ObjCPointers)
-    // still exist in our tables for later mangled name retrieval
-    // (the expression parser needs to do this).
-    CacheDemangledType(ConstString(SwiftLanguageRuntime::GetCurrentMangledName("_TtBO").c_str()).GetCString(),
-                       m_ast_context_ap->TheUnknownObjectType.getPointer());
-    CacheDemangledType(ConstString(SwiftLanguageRuntime::GetCurrentMangledName("_TtBp").c_str()).GetCString(),
-                       m_ast_context_ap->TheRawPointerType.getPointer());
-    CacheDemangledType(ConstString(SwiftLanguageRuntime::GetCurrentMangledName("_TtBb").c_str()).GetCString(),
-                       m_ast_context_ap->TheBridgeObjectType.getPointer());
-    CacheDemangledType(ConstString(SwiftLanguageRuntime::GetCurrentMangledName("_TtBo").c_str()).GetCString(),
-                       m_ast_context_ap->TheNativeObjectType.getPointer());
-    CacheDemangledType(ConstString(SwiftLanguageRuntime::GetCurrentMangledName("_TtT_").c_str()).GetCString(),
-                       m_ast_context_ap->TheEmptyTupleType.getPointer());
   }
 
   VALID_OR_RETURN(nullptr);
@@ -4604,10 +4579,14 @@ swift::irgen::IRGenModule &SwiftASTContext::GetIRGenModule() {
       if (sil_module != nullptr) {
         swift::irgen::IRGenerator &ir_generator =
             GetIRGenerator(ir_gen_opts, *sil_module);
+        swift::PrimarySpecificPaths PSPs =
+            GetCompilerInvocation()
+                .getFrontendOptions()
+                .InputsAndOutputs.getPrimarySpecificPathsForAtMostOnePrimary();
         m_ir_gen_module_ap.reset(new swift::irgen::IRGenModule(
             ir_generator, ir_generator.createTargetMachine(), nullptr,
-            GetGlobalLLVMContext(), ir_gen_opts.ModuleName,
-            ir_gen_opts.getSingleOutputFilename()));
+            GetGlobalLLVMContext(), ir_gen_opts.ModuleName, PSPs.OutputFilename,
+            PSPs.MainInputFilenameForDebugInfo));
         llvm::Module *llvm_module = m_ir_gen_module_ap->getModule();
         llvm_module->setDataLayout(data_layout.getStringRepresentation());
         llvm_module->setTargetTriple(triple);
@@ -5231,31 +5210,6 @@ bool SwiftASTContext::IsReferenceType(void *type, CompilerType *pointee_type,
   return false;
 }
 
-bool SwiftASTContext::IsInoutType(const CompilerType &compiler_type,
-                                  CompilerType *original_type) {
-  if (compiler_type.IsValid()) {
-    if (auto ast = llvm::dyn_cast_or_null<SwiftASTContext>(
-            compiler_type.GetTypeSystem())) {
-      swift::CanType swift_can_type(GetCanonicalSwiftType(compiler_type));
-      swift::LValueType *lvalue = swift_can_type->getAs<swift::LValueType>();
-      if (lvalue) {
-        if (original_type)
-          *original_type =
-          CompilerType(ast, lvalue->getObjectType().getPointer());
-        return true;
-      }
-      swift::InOutType *inout = swift_can_type->getAs<swift::InOutType>();
-      if (inout) {
-        if (original_type)
-          *original_type =
-          CompilerType(ast, inout->getObjectType().getPointer());
-        return true;
-      }
-    }
-  }
-  return false;
-}
-
 bool SwiftASTContext::IsFloatingPointType(void *type, uint32_t &count,
                                           bool &is_complex) {
   if (type) {
@@ -5467,37 +5421,6 @@ bool SwiftASTContext::GetProtocolTypeInfo(const CompilerType &type,
   }
 
   return false;
-}
-
-bool SwiftASTContext::IsOptionalChain(CompilerType type,
-                                      CompilerType &payload_type,
-                                      uint32_t &depth) {
-  auto is_optional = [](const CompilerType &type) -> bool {
-    if (auto ast =
-            llvm::dyn_cast_or_null<SwiftASTContext>(type.GetTypeSystem())) {
-      if (auto swift_ast = ast->GetASTContext()) {
-        swift::CanType swift_can_type(GetCanonicalSwiftType(type));
-        if (swift_can_type.getAnyOptionalObjectType())
-          return true;
-        return false;
-      }
-    }
-    return false;
-  };
-
-  depth = 0;
-
-  while (is_optional(type)) {
-    ++depth;
-    lldb::TemplateArgumentKind kind;
-    type = type.GetTemplateArgument(0, kind);
-  }
-
-  if (depth > 0) {
-    payload_type = type;
-    return true;
-  } else
-    return false;
 }
 
 SwiftASTContext::TypeAllocationStrategy
@@ -5727,7 +5650,6 @@ SwiftASTContext::GetTypeInfo(void *type,
     break;
 
   case swift::TypeKind::Optional:
-  case swift::TypeKind::ImplicitlyUnwrappedOptional:
   case swift::TypeKind::NameAlias:
   case swift::TypeKind::Paren:
   case swift::TypeKind::Dictionary:
@@ -5832,7 +5754,6 @@ lldb::TypeClass SwiftASTContext::GetTypeClass(void *type) {
     return lldb::eTypeClassOther;
 
   case swift::TypeKind::Optional:
-  case swift::TypeKind::ImplicitlyUnwrappedOptional:
   case swift::TypeKind::NameAlias:
   case swift::TypeKind::Paren:
   case swift::TypeKind::Dictionary:
@@ -6305,7 +6226,6 @@ lldb::Encoding SwiftASTContext::GetEncoding(void *type, uint64_t &count) {
     break;
 
   case swift::TypeKind::Optional:
-  case swift::TypeKind::ImplicitlyUnwrappedOptional:
   case swift::TypeKind::NameAlias:
   case swift::TypeKind::Paren:
   case swift::TypeKind::Dictionary:
@@ -6390,7 +6310,6 @@ lldb::Format SwiftASTContext::GetFormat(void *type) {
     break;
 
   case swift::TypeKind::Optional:
-  case swift::TypeKind::ImplicitlyUnwrappedOptional:
   case swift::TypeKind::NameAlias:
   case swift::TypeKind::Paren:
   case swift::TypeKind::Dictionary:
@@ -6490,7 +6409,6 @@ uint32_t SwiftASTContext::GetNumChildren(void *type,
     break;
 
   case swift::TypeKind::Optional:
-  case swift::TypeKind::ImplicitlyUnwrappedOptional:
   case swift::TypeKind::NameAlias:
   case swift::TypeKind::Paren:
   case swift::TypeKind::Dictionary:
@@ -6604,7 +6522,6 @@ uint32_t SwiftASTContext::GetNumFields(void *type) {
     break;
 
   case swift::TypeKind::Optional:
-  case swift::TypeKind::ImplicitlyUnwrappedOptional:
   case swift::TypeKind::NameAlias:
   case swift::TypeKind::Paren:
   case swift::TypeKind::Dictionary:
@@ -6743,7 +6660,6 @@ CompilerType SwiftASTContext::GetFieldAtIndex(void *type, size_t idx,
     break;
 
   case swift::TypeKind::Optional:
-  case swift::TypeKind::ImplicitlyUnwrappedOptional:
   case swift::TypeKind::NameAlias:
   case swift::TypeKind::Paren:
   case swift::TypeKind::Dictionary:
@@ -6846,7 +6762,6 @@ uint32_t SwiftASTContext::GetNumPointeeChildren(void *type) {
     return 0;
 
   case swift::TypeKind::Optional:
-  case swift::TypeKind::ImplicitlyUnwrappedOptional:
   case swift::TypeKind::NameAlias:
   case swift::TypeKind::Paren:
   case swift::TypeKind::Dictionary:
@@ -7254,7 +7169,6 @@ CompilerType SwiftASTContext::GetChildCompilerTypeAtIndex(
     break;
 
   case swift::TypeKind::Optional:
-  case swift::TypeKind::ImplicitlyUnwrappedOptional:
   case swift::TypeKind::NameAlias:
   case swift::TypeKind::Paren:
   case swift::TypeKind::Dictionary:
@@ -7438,7 +7352,6 @@ size_t SwiftASTContext::GetIndexOfChildMemberWithName(
       break;
 
     case swift::TypeKind::Optional:
-    case swift::TypeKind::ImplicitlyUnwrappedOptional:
     case swift::TypeKind::NameAlias:
     case swift::TypeKind::Paren:
     case swift::TypeKind::Dictionary:
@@ -7571,7 +7484,6 @@ SwiftASTContext::GetIndexOfChildWithName(void *type, const char *name,
       break;
 
     case swift::TypeKind::Optional:
-    case swift::TypeKind::ImplicitlyUnwrappedOptional:
     case swift::TypeKind::NameAlias:
     case swift::TypeKind::Paren:
     case swift::TypeKind::Dictionary:
@@ -7898,7 +7810,6 @@ bool SwiftASTContext::DumpTypeValue(
     break;
 
   case swift::TypeKind::Optional:
-  case swift::TypeKind::ImplicitlyUnwrappedOptional:
   case swift::TypeKind::NameAlias:
   case swift::TypeKind::Paren:
   case swift::TypeKind::Dictionary:

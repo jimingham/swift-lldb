@@ -23,10 +23,10 @@ class REPLNSStringTestCase (lldbrepl.REPLTest):
 
     mydir = lldbrepl.REPLTest.compute_mydir(__file__)
 
+    # rdar://37407231 -- This is flaky when run as a PR test.
     @decorators.swiftTest
     @decorators.skipUnlessDarwin
     @decorators.no_debug_info_test
-    @decorators.skipIf # rdar://36843869
     def testREPL(self):
         lldbrepl.REPLTest.testREPL(self)
 

@@ -49,6 +49,7 @@ if (NOT LLDB_DISABLE_PYTHON)
 
   add_subdirectory(scripts)
 endif ()
+
 add_subdirectory(source)
 add_subdirectory(test)
 add_subdirectory(tools)
