@@ -66,9 +66,15 @@ class TestSwiftStepping(lldbtest.TestBase):
     def hit_correct_function(self, thread, pattern):
         # print "Check if we got to: ", pattern
         name = thread.frames[0].GetFunctionName()
+        line_entry = thread.frames[0].GetLineEntry()
+        desc = lldb.SBStream()
+        if line_entry.IsValid():
+            line_entry.GetDescription(desc)
+        else:
+            desc.Print(name)
         self.assertTrue(
             pattern in name,
-            "Got to '%s' not the expected function '%s'." % (name, pattern))
+            "Got to '%s' not the expected function '%s'." % (desc.GetData(), pattern))
 
     def do_test(self):
         """Tests that we can step reliably in swift code."""
